@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+build/
+dist/
+*.spec
+登録データ/
+計算結果/
+backups/
+*.sqlite3
+*.xlsx
