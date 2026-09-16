@@ -13,11 +13,14 @@ from core.optimizer import group_sheet_plans
 from core.weight import normalize_spec
 from core.product_registry import ProductRegistry
 from core.loss_settings import LossSettings
+from project_workflow import ProjectWorkflow
 
 
-class AutoLengthApp(ShearingApp):
+class AutoLengthApp(ProjectWorkflow, ShearingApp):
     def __init__(self, root):
         self.root = root
+        self.data_dir=APP_DIR
+        self.init_workflow()
         root.title("シャーリング取り合わせ — 大板長さ自動計算版")
         root.geometry("1500x940")
         root.minsize(1100, 750)
@@ -32,6 +35,7 @@ class AutoLengthApp(ShearingApp):
             self.loss_store=None
         self._build_auto()
         self.add_product_row()
+        self.finish_workflow()
 
     def _build_auto(self):
         for name in ("TkDefaultFont", "TkTextFont"):
@@ -83,6 +87,17 @@ class AutoLengthApp(ShearingApp):
         banner.pack(fill="x",pady=(0,8))
         ttk.Label(banner, text="大板長さ 自動計算", style="Banner.TLabel").pack(anchor="w")
         ttk.Label(banner, text="製品サイズと必要枚数から、大板の長さ・枚数を算出します。寸法の単位：mm",style="BannerSub.TLabel").pack(anchor="w")
+        menu=tk.Menu(self.root)
+        projects=tk.Menu(menu,tearoff=False)
+        projects.add_command(label="案件情報",command=self.project_metadata)
+        projects.add_command(label="案件を保存",command=self.save_project_dialog)
+        projects.add_command(label="案件を開く",command=self.open_project_dialog)
+        menu.add_cascade(label="案件",menu=projects)
+        self.root.config(menu=menu)
+        buttons=ttk.Frame(banner,style="Banner.TFrame")
+        buttons.place(relx=1,rely=0,anchor="ne")
+        ttk.Button(buttons,text="案件を保存",command=self.save_project_dialog).pack(side="left",padx=4)
+        ttk.Button(buttons,text="案件を開く",command=self.open_project_dialog).pack(side="left")
         settings = ttk.LabelFrame(main, text="1  大板の条件", padding=10)
         settings.pack(fill="x", pady=10)
         self.settings = []
@@ -114,6 +129,7 @@ class AutoLengthApp(ShearingApp):
         product_actions.pack(fill="x")
         ttk.Button(product_actions,text="＋ 製品追加",command=self.add_product_row).pack(side="left")
         ttk.Button(product_actions,text="登録製品から追加・管理",command=self.open_registry).pack(side="left",padx=8)
+        ttk.Button(product_actions,text="Excelから貼り付け",command=self.paste_excel).pack(side="left",padx=4)
         ttk.Label(product_actions,text="各行の「登録」で保存できます。",foreground="#536779").pack(side="left")
         actions = ttk.Frame(main,style="Page.TFrame")
         actions.pack(fill="x",pady=8)
@@ -175,7 +191,14 @@ class AutoLengthApp(ShearingApp):
     def add_product_row(self):
         super().add_product_row()
         row=self.product_rows[-1]
+        for var in row["vars"]+[row["qty"],row["rotate"]]:
+            var.trace_add("write",self.inputs_changed)
+        self.inputs_changed()
         ttk.Button(row["frame"],text="登録",command=lambda:self.register_product(row)).pack(side="left",padx=4)
+
+    def remove_product_row(self,row):
+        super().remove_product_row(row)
+        self.inputs_changed()
 
     def register_product(self,row):
         try:
@@ -254,6 +277,7 @@ class AutoLengthApp(ShearingApp):
         tree.bind("<Double-1>",lambda _:add())
 
     def save_loss(self,key,var):
+        if self.suppress_changes: return
         if self.loss_store:
             try:
                 self.loss_store.save(key,var.get())
@@ -261,6 +285,10 @@ class AutoLengthApp(ShearingApp):
                 self.status_var.set(f"設定を保存できません：{exc}")
 
     def start_calculation(self):
+        if str(self.calc_button.cget("state"))=="disabled": return
+        self.result_valid=False
+        self.export_button.configure(state="disabled")
+        self.calculation_revision=self.input_revision
         try:
             products=[]
             for i,row in enumerate(self.product_rows,1):
@@ -312,11 +340,18 @@ class AutoLengthApp(ShearingApp):
         if not self.results:
             self.sheet_total_var.set("必要大板：候補なし")
         if self.results:
-            self.export_button.configure(state="normal")
+            self.result_revision=self.calculation_revision
+            self.result_valid=self.result_revision==self.input_revision and not self.cancel_event.is_set()
+            self.export_button.configure(state="normal" if self.result_valid else "disabled")
+            if not self.result_valid:
+                self.status_var.set("入力変更または中止のため再計算してください")
             self.result_tree.selection_set("0")
             self.show_selected()
 
     def export_excel(self):
+        if not self.result_valid or self.result_revision!=self.input_revision:
+            self.status_var.set("入力が変更されています。再計算してください")
+            return
         selected=self.result_tree.selection()
         if not selected:
             return
@@ -329,6 +364,7 @@ class AutoLengthApp(ShearingApp):
                 defaultextension=".xlsx",filetypes=[("Excelブック","*.xlsx")])
             if not path:
                 return
+            if not self.result_valid or self.result_revision!=self.input_revision: return
             export_auto(path,self.results[index],self.current_products,self.current_settings,index+1)
             messagebox.showinfo("Excel出力完了",f"図解付きの結果を保存しました。\n{path}")
         except Exception as exc:
@@ -342,6 +378,8 @@ class AutoLengthApp(ShearingApp):
 
     def show_result(self,result):
         self.sheet_total_var.set(f"必要大板：合計 {len(result.sheets)} 枚" + ("（不足あり）" if not result.complete else ""))
+        if not self.result_valid:
+            self.sheet_total_var.set("前回の計算結果："+str(len(result.sheets))+"枚（再計算が必要）")
         products={p.id:p for p in self.current_products}
         dims=Counter((s.sheet_type.spec,s.sheet_type.thickness,s.sheet_type.width,s.sheet_type.length) for s in result.sheets)
         lines=[f"必要大板：合計 {len(result.sheets)} 枚",f"歩留り {result.yield_rate:.2f}% ／ 歩損 {result.loss_rate:.2f}%","","幅 × 自動計算長さ / 枚数"]

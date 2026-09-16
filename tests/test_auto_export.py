@@ -43,6 +43,10 @@ class ExportTests(unittest.TestCase):
             app.settings[0].set("999")
             with patch("app_auto_length.filedialog.asksaveasfilename",return_value="sample.xlsx"),patch("app_auto_length.export_auto") as export,patch("app_auto_length.messagebox.showinfo"):
                 app.export_excel()
+                export.assert_not_called()
+                app.result_valid=True
+                app.result_revision=app.input_revision
+                app.export_excel()
                 self.assertIs(export.call_args.args[1],app.results[1])
                 self.assertEqual(export.call_args.args[3],(1219,10,2438,0))
         finally:

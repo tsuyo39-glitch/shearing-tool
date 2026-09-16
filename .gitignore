@@ -4,6 +4,7 @@ build/
 dist/
 *.spec
 登録データ/
+案件データ/
 計算結果/
 backups/
 *.sqlite3
