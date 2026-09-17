@@ -24,6 +24,7 @@ class AutoLengthApp(ProjectWorkflow, ShearingApp):
         root.title("シャーリング取り合わせ — 大板長さ自動計算版")
         root.geometry("1500x940")
         root.minsize(1100, 750)
+        root.resizable(True, True)
         self.product_rows, self.sheet_rows, self.results = [], [], []
         self.current_products, self.current_sheets = [], []
         self.cancel_event = threading.Event()
@@ -87,17 +88,11 @@ class AutoLengthApp(ProjectWorkflow, ShearingApp):
         banner.pack(fill="x",pady=(0,8))
         ttk.Label(banner, text="大板長さ 自動計算", style="Banner.TLabel").pack(anchor="w")
         ttk.Label(banner, text="製品サイズと必要枚数から、大板の長さ・枚数を算出します。寸法の単位：mm",style="BannerSub.TLabel").pack(anchor="w")
-        menu=tk.Menu(self.root)
-        projects=tk.Menu(menu,tearoff=False)
-        projects.add_command(label="案件情報",command=self.project_metadata)
-        projects.add_command(label="案件を保存",command=self.save_project_dialog)
-        projects.add_command(label="案件を開く",command=self.open_project_dialog)
-        menu.add_cascade(label="案件",menu=projects)
-        self.root.config(menu=menu)
         buttons=ttk.Frame(banner,style="Banner.TFrame")
         buttons.place(relx=1,rely=0,anchor="ne")
         ttk.Button(buttons,text="案件を保存",command=self.save_project_dialog).pack(side="left",padx=4)
         ttk.Button(buttons,text="案件を開く",command=self.open_project_dialog).pack(side="left")
+        ttk.Button(buttons,text="情報編集",command=self.project_metadata).pack(side="left",padx=4)
         settings = ttk.LabelFrame(main, text="1  大板の条件", padding=10)
         settings.pack(fill="x", pady=10)
         self.settings = []
@@ -116,22 +111,29 @@ class AutoLengthApp(ProjectWorkflow, ShearingApp):
                 var.set(f"{self.loss_store.values[key]:g}")
             var.trace_add("write",lambda *_args,k=key,v=var:self.save_loss(k,v))
         ttk.Label(main, text="幅ロスは片側のみ、長さロスは前後各辺に適用します。各ロス・切断代は入力すると保存されます。", foreground="#536779").pack(anchor="w")
-        box = ttk.LabelFrame(main, text="2  必要な製品", padding=8)
-        box.pack(fill="x", pady=8)
+        ttk.Label(main, text="製品欄と結果欄の間の青い境界を上下にドラッグすると、表示の高さを変更できます。", foreground="#234D78").pack(anchor="w", pady=(4, 0))
+        self.workspace_split = tk.PanedWindow(main, orient="vertical", sashwidth=10,
+                    sashrelief="raised", showhandle=True, handlesize=8,
+                    background="#AFC3DC", borderwidth=0, opaqueresize=True)
+        self.workspace_split.pack(fill="both", expand=True, pady=(6, 0))
+        box = ttk.LabelFrame(self.workspace_split, text="2  必要な製品", padding=8)
+        self.workspace_split.add(box, minsize=170, height=270, stretch="always")
         headers = ttk.Frame(box)
         headers.pack(fill="x")
         for text, width in [("製品名",14),("規格（任意）",21),("板厚（任意）",10),("幅 mm",11),("長さ mm",11),("必要枚数",10)]:
             ttk.Label(headers,text=text,width=width).pack(side="left",padx=2)
         self.product_scroll = ScrollRows(box)
-        self.product_scroll.canvas.configure(background="#FFFFFF",height=80)
-        self.product_scroll.pack(fill="x")
+        self.product_scroll.canvas.configure(background="#FFFFFF",height=180)
         product_actions=ttk.Frame(box)
-        product_actions.pack(fill="x")
+        product_actions.pack(side="bottom", fill="x", pady=(4, 0))
+        self.product_scroll.pack(fill="both", expand=True)
         ttk.Button(product_actions,text="＋ 製品追加",command=self.add_product_row).pack(side="left")
         ttk.Button(product_actions,text="登録製品から追加・管理",command=self.open_registry).pack(side="left",padx=8)
         ttk.Button(product_actions,text="Excelから貼り付け",command=self.paste_excel).pack(side="left",padx=4)
         ttk.Label(product_actions,text="各行の「登録」で保存できます。",foreground="#536779").pack(side="left")
-        actions = ttk.Frame(main,style="Page.TFrame")
+        result_area = ttk.Frame(self.workspace_split, style="Page.TFrame")
+        self.workspace_split.add(result_area, minsize=300, height=380, stretch="always")
+        actions = ttk.Frame(result_area,style="Page.TFrame")
         actions.pack(fill="x",pady=8)
         self.calc_button=ttk.Button(actions,text="長さ・枚数を計算",command=self.start_calculation,style="Calculate.TButton")
         self.calc_button.pack(side="left")
@@ -141,8 +143,8 @@ class AutoLengthApp(ProjectWorkflow, ShearingApp):
         self.export_button.pack(side="left",padx=6)
         self.status_var=tk.StringVar(value="製品を入力してください")
         ttk.Label(actions,textvariable=self.status_var).pack(side="left",padx=10)
-        ttk.Label(main,text="候補は必要数量を満たすものから、投入面積の小さい順に表示（探索候補・最適性の保証なし）。",foreground="#536779").pack(anchor="w")
-        pane=ttk.Panedwindow(main,orient="horizontal")
+        ttk.Label(result_area,text="必要数量を満たし、使用する大板の合計面積が少ない順に表示",foreground="#536779").pack(anchor="w")
+        pane=ttk.Panedwindow(result_area,orient="horizontal")
         pane.pack(fill="both",expand=True,pady=6)
         left=ttk.LabelFrame(pane,text="3  計算候補・製品別数量",padding=8)
         right=ttk.LabelFrame(pane,text="4  取り合わせ図",padding=8)
@@ -440,6 +442,19 @@ class AutoLengthApp(ProjectWorkflow, ShearingApp):
 
 
 if __name__ == "__main__":
+    from license_gate import require_license
     root=tk.Tk()
-    AutoLengthApp(root)
-    root.mainloop()
+    license_info = require_license(root, APP_DIR)
+    if license_info is None:
+        root.destroy()
+    else:
+        AutoLengthApp(root)
+        from core.licensing import parse_time
+        if license_info['expires_at'] is None:
+            license_label = 'ライセンス：無期限'
+        else:
+            expiry = parse_time(license_info['expires_at']).astimezone().strftime('%Y-%m-%d %H:%M %Z')
+            license_label = '有効期限 ' + expiry
+        root.title(root.title() + '  | ' + license_label)
+        root.deiconify()
+        root.mainloop()
