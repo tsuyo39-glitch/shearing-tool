@@ -21,7 +21,7 @@ def require_license(root, app_dir):
 
     result = None
     window = tk.Toplevel(root)
-    window.title('シャーリング取り合わせ — ライセンス登録')
+    window.title('シャーリング取り合わせツール — ライセンス登録')
     window.geometry('760x340')
     window.minsize(640, 320)
     window.configure(background='#eef2f7')

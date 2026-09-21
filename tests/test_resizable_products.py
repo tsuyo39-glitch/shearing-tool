@@ -16,7 +16,8 @@ class ResizeTests(unittest.TestCase):
                 for _ in range(19): app.add_product_row()
                 root.geometry('1500x940+0+0'); root.update()
                 self.assertEqual(tuple(map(int, root.resizable())), (1, 1))
-                self.assertGreaterEqual(app.product_scroll.canvas.winfo_height(), 150)
+                self.assertGreaterEqual(app.product_scroll.canvas.winfo_height(), 90)
+                self.assertLessEqual(app.product_scroll.canvas.winfo_height(), 130)
                 before = app.product_scroll.canvas.winfo_height()
                 split = app.workspace_split
                 x, y = split.sash_coord(0)

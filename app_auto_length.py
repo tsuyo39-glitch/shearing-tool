@@ -21,7 +21,7 @@ class AutoLengthApp(ProjectWorkflow, ShearingApp):
         self.root = root
         self.data_dir=APP_DIR
         self.init_workflow()
-        root.title("シャーリング取り合わせ — 大板長さ自動計算版")
+        root.title("シャーリング取り合わせツール")
         root.geometry("1500x940")
         root.minsize(1100, 750)
         root.resizable(True, True)
@@ -86,7 +86,7 @@ class AutoLengthApp(ProjectWorkflow, ShearingApp):
         main.pack(fill="both", expand=True)
         banner=ttk.Frame(main,style="Banner.TFrame",padding=(16,6))
         banner.pack(fill="x",pady=(0,8))
-        ttk.Label(banner, text="大板長さ 自動計算", style="Banner.TLabel").pack(anchor="w")
+        ttk.Label(banner, text="シャーリング取り合わせツール", style="Banner.TLabel").pack(anchor="w")
         ttk.Label(banner, text="製品サイズと必要枚数から、大板の長さ・枚数を算出します。寸法の単位：mm",style="BannerSub.TLabel").pack(anchor="w")
         buttons=ttk.Frame(banner,style="Banner.TFrame")
         buttons.place(relx=1,rely=0,anchor="ne")
@@ -117,13 +117,13 @@ class AutoLengthApp(ProjectWorkflow, ShearingApp):
                     background="#AFC3DC", borderwidth=0, opaqueresize=True)
         self.workspace_split.pack(fill="both", expand=True, pady=(6, 0))
         box = ttk.LabelFrame(self.workspace_split, text="2  必要な製品", padding=8)
-        self.workspace_split.add(box, minsize=170, height=270, stretch="always")
+        self.workspace_split.add(box, minsize=170, height=200, stretch="never")
         headers = ttk.Frame(box)
         headers.pack(fill="x")
         for text, width in [("製品名",14),("規格（任意）",21),("板厚（任意）",10),("幅 mm",11),("長さ mm",11),("必要枚数",10)]:
             ttk.Label(headers,text=text,width=width).pack(side="left",padx=2)
         self.product_scroll = ScrollRows(box)
-        self.product_scroll.canvas.configure(background="#FFFFFF",height=180)
+        self.product_scroll.canvas.configure(background="#FFFFFF",height=110)
         product_actions=ttk.Frame(box)
         product_actions.pack(side="bottom", fill="x", pady=(4, 0))
         self.product_scroll.pack(fill="both", expand=True)
