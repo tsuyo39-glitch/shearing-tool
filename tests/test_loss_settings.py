@@ -25,7 +25,9 @@ class LossTests(unittest.TestCase):
             store.save("gap","2")
             for bad in ("","-1","nan","inf"):
                 store.save("length",bad)
-            self.assertEqual(LossSettings(path).values,{"width":12.5,"length":5,"gap":2})
+            store.save("round","50")
+            store.save("time","30")
+            self.assertEqual(LossSettings(path).values,{"width":12.5,"length":5,"gap":2,"round":50,"time":30})
 
     def test_length_loss(self):
         p=product(155,1219,7,False)

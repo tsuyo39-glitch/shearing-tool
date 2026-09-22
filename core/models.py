@@ -17,6 +17,11 @@ class ProductSpec:
     destination: str = ""
     monthly_usage: float = 0.0
     remarks: str = ""
+    coating: Optional[str] = None
+
+    @property
+    def weight_spec(self) -> str:
+        return self.spec if self.coating is None else self.coating
 
     @property
     def area(self) -> float:
@@ -35,6 +40,11 @@ class SheetType:
     edge_loss: float = 10.0
     cut_allowance: float = 0.0
     length_loss: float = 0.0
+    coating: Optional[str] = None
+
+    @property
+    def weight_spec(self) -> str:
+        return self.spec if self.coating is None else self.coating
 
     @property
     def usable_width(self) -> float:
@@ -81,6 +91,11 @@ class OptimizationResult:
     timed_out: bool = False
     warnings: list[str] = field(default_factory=list)
     candidate_sheet_ids: tuple[str, ...] = ()
+
+    @property
+    def weight_available(self) -> bool:
+        """板厚が1つでも空欄だと_resultが重量を0にするため、表示可否の判定に使う。"""
+        return self.sheet_weight > 0
 
     @property
     def shortage_by_product(self) -> dict[str, int]:

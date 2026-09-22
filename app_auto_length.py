@@ -10,8 +10,10 @@ from datetime import datetime
 from core.models import ProductSpec
 from core.auto_length import optimize_auto
 from core.optimizer import group_sheet_plans
-from core.weight import normalize_spec
+from core.weight import coating_detail, normalize_spec, coating_codes, master
 from core.product_registry import ProductRegistry
+from core.coating_registry import CoatingRegistry, validate as validate_coating
+from dataclasses import replace as replace_coating
 from core.loss_settings import LossSettings
 from project_workflow import ProjectWorkflow
 
@@ -34,6 +36,11 @@ class AutoLengthApp(ProjectWorkflow, ShearingApp):
         except Exception as exc:
             messagebox.showerror("ロス設定読込エラー",str(exc))
             self.loss_store=None
+        try:
+            self.coating=CoatingRegistry(APP_DIR / "登録データ" / "目付マスタ.json")
+        except Exception as exc:
+            messagebox.showerror("目付マスタ読込エラー","JIS G 3302 Z系の初期値で起動します。 / "+str(exc))
+            self.coating=None
         self._build_auto()
         self.add_product_row()
         self.finish_workflow()
@@ -95,22 +102,29 @@ class AutoLengthApp(ProjectWorkflow, ShearingApp):
         ttk.Button(buttons,text="情報編集",command=self.project_metadata).pack(side="left",padx=4)
         settings = ttk.LabelFrame(main, text="1  大板の条件", padding=10)
         settings.pack(fill="x", pady=10)
+        # 最小幅1100pxでも見切れないよう、寸法とロスを2段に分ける。
+        sizes = ttk.Frame(settings)
+        sizes.pack(fill="x")
+        losses = ttk.Frame(settings)
+        losses.pack(fill="x", pady=(8, 0))
         self.settings = []
         for label, value in [("大板幅", "1219"), ("幅ロス", "10"), ("最大大板長さ", "1219"), ("製品間切断代", "0")]:
-            ttk.Label(settings, text=label).pack(side="left", padx=(0, 6))
+            ttk.Label(sizes, text=label).pack(side="left", padx=(0, 6))
             var = tk.StringVar(value=value)
-            ttk.Entry(settings, textvariable=var, width=9).pack(side="left", padx=(0, 4))
-            ttk.Label(settings, text="mm").pack(side="left", padx=(0, 18))
+            ttk.Entry(sizes, textvariable=var, width=9).pack(side="left", padx=(0, 4))
+            ttk.Label(sizes, text="mm").pack(side="left", padx=(0, 18))
             self.settings.append(var)
-        ttk.Label(settings,text="長さロス（前後各）").pack(side="left",padx=(0,6))
         self.length_loss_var=tk.StringVar(value="0")
-        ttk.Entry(settings,textvariable=self.length_loss_var,width=7).pack(side="left")
-        ttk.Label(settings,text="mm").pack(side="left",padx=4)
-        for key,var in [("width",self.settings[1]),("length",self.length_loss_var),("gap",self.settings[3])]:
+        self.length_round_var=tk.StringVar(value="0")
+        for label,var in [("長さロス（前後各）",self.length_loss_var),("長さ丸め",self.length_round_var)]:
+            ttk.Label(losses,text=label).pack(side="left",padx=(0,6))
+            ttk.Entry(losses,textvariable=var,width=9).pack(side="left",padx=(0,4))
+            ttk.Label(losses,text="mm").pack(side="left",padx=(0,18))
+        for key,var in [("width",self.settings[1]),("length",self.length_loss_var),("gap",self.settings[3]),("round",self.length_round_var)]:
             if self.loss_store:
                 var.set(f"{self.loss_store.values[key]:g}")
             var.trace_add("write",lambda *_args,k=key,v=var:self.save_loss(k,v))
-        ttk.Label(main, text="幅ロスは片側のみ、長さロスは前後各辺に適用します。各ロス・切断代は入力すると保存されます。", foreground="#536779").pack(anchor="w")
+        ttk.Label(main, text="幅ロスは片側のみ、長さロスは前後各辺に適用します。長さ丸めは算出長さをその倍数へ切り上げます（0で丸めなし）。各設定は入力すると保存されます。", foreground="#536779").pack(anchor="w")
         ttk.Label(main, text="製品欄と結果欄の間の青い境界を上下にドラッグすると、表示の高さを変更できます。", foreground="#234D78").pack(anchor="w", pady=(4, 0))
         self.workspace_split = tk.PanedWindow(main, orient="vertical", sashwidth=10,
                     sashrelief="raised", showhandle=True, handlesize=8,
@@ -120,8 +134,13 @@ class AutoLengthApp(ProjectWorkflow, ShearingApp):
         self.workspace_split.add(box, minsize=170, height=200, stretch="never")
         headers = ttk.Frame(box)
         headers.pack(fill="x")
-        for text, width in [("製品名",14),("規格（任意）",21),("板厚（任意）",10),("幅 mm",11),("長さ mm",11),("必要枚数",10)]:
-            ttk.Label(headers,text=text,width=width).pack(side="left",padx=2)
+        self.product_headers=[]
+        for text, width in [("製品名",14),("規格（任意）",21),("目付（めっき）",14),("板厚（任意）",10),("幅 mm",11),("長さ mm",11),("必要枚数",10)]:
+            cell=ttk.Frame(headers,width=width*8,height=24)
+            cell.pack(side="left",padx=2)
+            cell.pack_propagate(False)
+            ttk.Label(cell,text=text).pack(anchor="w")
+            self.product_headers.append(cell)
         self.product_scroll = ScrollRows(box)
         self.product_scroll.canvas.configure(background="#FFFFFF",height=110)
         product_actions=ttk.Frame(box)
@@ -129,12 +148,19 @@ class AutoLengthApp(ProjectWorkflow, ShearingApp):
         self.product_scroll.pack(fill="both", expand=True)
         ttk.Button(product_actions,text="＋ 製品追加",command=self.add_product_row).pack(side="left")
         ttk.Button(product_actions,text="登録製品から追加・管理",command=self.open_registry).pack(side="left",padx=8)
-        ttk.Button(product_actions,text="Excelから貼り付け",command=self.paste_excel).pack(side="left",padx=4)
+        ttk.Button(product_actions,text="めっき目付マスタ",command=self.open_coating_master).pack(side="left",padx=4)
         ttk.Label(product_actions,text="各行の「登録」で保存できます。",foreground="#536779").pack(side="left")
         result_area = ttk.Frame(self.workspace_split, style="Page.TFrame")
         self.workspace_split.add(result_area, minsize=300, height=380, stretch="always")
         actions = ttk.Frame(result_area,style="Page.TFrame")
         actions.pack(fill="x",pady=8)
+        ttk.Label(actions,text="計算時間",style="Page.TLabel").pack(side="left",padx=(0,4))
+        self.time_var=tk.StringVar(value="10")
+        ttk.Entry(actions,textvariable=self.time_var,width=5).pack(side="left")
+        ttk.Label(actions,text="秒",style="Page.TLabel").pack(side="left",padx=(3,12))
+        if self.loss_store:
+            self.time_var.set(f"{self.loss_store.values['time']:g}")
+        self.time_var.trace_add("write",lambda *_args:self.save_loss("time",self.time_var))
         self.calc_button=ttk.Button(actions,text="長さ・枚数を計算",command=self.start_calculation,style="Calculate.TButton")
         self.calc_button.pack(side="left")
         self.cancel_button=ttk.Button(actions,text="中止",command=self.cancel_calculation,state="disabled")
@@ -154,10 +180,10 @@ class AutoLengthApp(ProjectWorkflow, ShearingApp):
         ttk.Label(left,textvariable=self.sheet_total_var,font=("Yu Gothic UI",18,"bold"),foreground="#174B7D").pack(anchor="w",pady=(0,8))
         candidates=ttk.Frame(left)
         candidates.pack(fill="x")
-        self.result_tree=ttk.Treeview(candidates,columns=("state","qty","yield"),show="headings",height=2)
-        for key,label in [("state","候補"),("qty","大板枚数"),("yield","歩留り")]:
+        self.result_tree=ttk.Treeview(candidates,columns=("state","qty","yield","scrap"),show="headings",height=2)
+        for key,label,width in [("state","候補",130),("qty","大板枚数",85),("yield","歩留り",85),("scrap","端材kg",90)]:
             self.result_tree.heading(key,text=label)
-            self.result_tree.column(key,width=100,anchor="center")
+            self.result_tree.column(key,width=width,anchor="center")
         candidate_scroll=ttk.Scrollbar(candidates,orient="vertical",command=self.result_tree.yview)
         self.result_tree.configure(yscrollcommand=candidate_scroll.set)
         candidate_scroll.pack(side="right",fill="y")
@@ -193,10 +219,25 @@ class AutoLengthApp(ProjectWorkflow, ShearingApp):
     def add_product_row(self):
         super().add_product_row()
         row=self.product_rows[-1]
-        for var in row["vars"]+[row["qty"],row["rotate"]]:
+        row["coating"]=tk.StringVar(value="なし")
+        row["coating_combo"]=ttk.Combobox(row["frame"],textvariable=row["coating"],
+            values=self.coating_choices(),state="readonly",width=12)
+        row["coating_combo"].pack(side="left",padx=2,before=row["frame"].winfo_children()[2])
+        for header,widget in zip(self.product_headers,row["frame"].pack_slaves()[:7]):
+            header.configure(width=widget.winfo_reqwidth())
+        for var in row["vars"]+[row["qty"],row["rotate"],row["coating"]]:
             var.trace_add("write",self.inputs_changed)
         self.inputs_changed()
         ttk.Button(row["frame"],text="登録",command=lambda:self.register_product(row)).pack(side="left",padx=4)
+
+    def coating_choices(self):
+        return ["なし"]+sorted(master())
+
+    def restore_coating(self,row,value,spec):
+        if value is None:
+            value="/".join(coating_codes(spec)) or "なし"
+        row["coating"].set(value or "なし")
+        row["coating_combo"].configure(values=list(dict.fromkeys(self.coating_choices()+[row["coating"].get()])))
 
     def remove_product_row(self,row):
         super().remove_product_row(row)
@@ -208,7 +249,7 @@ class AutoLengthApp(ProjectWorkflow, ShearingApp):
             if any(p[0]==values[0] for p in self.registry.list()):
                 if not messagebox.askyesno("登録内容の更新",f"「{values[0]}」は登録済みです。内容を更新しますか？"):
                     return
-            self.registry.save(values,row["qty"].get(),row["rotate"].get())
+            self.registry.save(values,row["qty"].get(),row["rotate"].get(),row["coating"].get())
             self.status_var.set(f"登録しました：{values[0]}")
         except Exception as exc:
             messagebox.showerror("製品登録エラー",str(exc))
@@ -230,8 +271,8 @@ class AutoLengthApp(ProjectWorkflow, ShearingApp):
         ttk.Entry(window,textvariable=search).grid(row=1,column=0,sticky="ew",padx=12)
         frame=ttk.Frame(window)
         frame.grid(row=2,column=0,sticky="nsew",padx=12,pady=8)
-        tree=ttk.Treeview(frame,columns=tuple(range(7)),show="headings",selectmode="extended")
-        for i,label in enumerate(["製品名","規格","板厚(mm)","幅(mm)","長さ(mm)","必要枚数","回転"]):
+        tree=ttk.Treeview(frame,columns=tuple(range(8)),show="headings",selectmode="extended")
+        for i,label in enumerate(["製品名","規格","板厚(mm)","幅(mm)","長さ(mm)","必要枚数","回転","目付（めっき）"]):
             tree.heading(i,text=label)
             tree.column(i,width=160 if i==0 else 100)
         scroll=ttk.Scrollbar(frame,orient="vertical",command=tree.yview)
@@ -242,7 +283,7 @@ class AutoLengthApp(ProjectWorkflow, ShearingApp):
             tree.delete(*tree.get_children())
             for i,p in enumerate(records):
                 if search.get().casefold() in (p[0]+" "+p[1]).casefold():
-                    tree.insert("","end",iid=str(i),values=(*p[:6],"可" if p[6] else "不可"))
+                    tree.insert("","end",iid=str(i),values=(*p[:6],"可" if p[6] else "不可",p[7] if p[7] is not None else "/".join(coating_codes(p[1])) or "なし"))
         search.trace_add("write",refresh)
         refresh()
         def add():
@@ -257,6 +298,7 @@ class AutoLengthApp(ProjectWorkflow, ShearingApp):
                     blank=self.product_rows[-1]
                 for var,value in zip(blank["vars"],p[:5]):
                     var.set(value)
+                self.restore_coating(blank,p[7],p[1])
                 blank["qty"].set(p[5])
                 blank["rotate"].set(bool(p[6]))
             self.status_var.set(f"登録製品を{len(selected)}件追加しました。枚数を確認して再計算してください。")
@@ -278,6 +320,131 @@ class AutoLengthApp(ProjectWorkflow, ShearingApp):
         ttk.Button(actions,text="選択した登録を削除",command=delete).pack(side="left",padx=8)
         tree.bind("<Double-1>",lambda _:add())
 
+    def open_coating_master(self):
+        if not self.coating:
+            messagebox.showerror("めっき目付マスタ","目付マスタを読み込めませんでした。「登録データ/目付マスタ.json」を確認してください。")
+            return
+        values=dict(self.coating.values)
+        window=tk.Toplevel(self.root)
+        window.title("めっき目付マスタ — 溶融亜鉛・電気亜鉛・アロイ（F）・亜鉛・アルミニウム・マグネシウム合金めっき")
+        window.geometry("920x660")
+        window.minsize(840,560)
+        window.columnconfigure(0,weight=1)
+        window.rowconfigure(2,weight=1)
+        ttk.Label(window,text="単位質量(kg/m²) ＝ 表示厚さ(mm) × 7.85 ＋ めっき量定数(kg/m²)。質量計算に使うのはめっき量定数です。",
+                  wraplength=880).grid(row=0,column=0,sticky="w",padx=12,pady=(10,2))
+        ttk.Label(window,text="Z：溶融亜鉛、E：電気亜鉛、F：アロイ（合金化溶融亜鉛）、K・ZAM：亜鉛・アルミニウム・マグネシウム合金めっき。数値は両面の重量計算用定数 kg/m²です。付着量の最小値 g/m²とは区別します。",
+                  foreground="#9C5700",wraplength=880).grid(row=1,column=0,sticky="w",padx=12,pady=(0,6))
+        frame=ttk.Frame(window)
+        frame.grid(row=2,column=0,sticky="nsew",padx=12)
+        frame.columnconfigure(0,weight=1)
+        frame.rowconfigure(0,weight=1)
+        # 既定の10行のままだと最小サイズで下部のボタンが押し出されるため高さを抑える。
+        tree=ttk.Treeview(frame,columns=("code","constant","side","confirmed","note"),show="headings",selectmode="extended",height=6)
+        for key,label,width in [("code","めっき記号",100),("constant","めっき量定数 kg/m²",150),
+                                ("side","片面 kg/m²",100),("confirmed","確認",70),("note","出典・付着量",380)]:
+            tree.heading(key,text=label)
+            tree.column(key,width=width,anchor="w" if key=="note" else "center")
+        tree.grid(row=0,column=0,sticky="nsew")
+        scroll=ttk.Scrollbar(frame,orient="vertical",command=tree.yview)
+        tree.configure(yscrollcommand=scroll.set)
+        scroll.grid(row=0,column=1,sticky="ns")
+        code_var,constant_var,side_var,note_var=(tk.StringVar() for _ in range(4))
+        confirmed_var=tk.BooleanVar(value=True)
+        def refresh(select=None):
+            tree.delete(*tree.get_children())
+            for code,entry in sorted(values.items()):
+                tree.insert("","end",iid=code,values=(
+                    code,f"{entry.constant_kg_m2:g}",
+                    "—" if entry.per_side_kg_m2 is None else f"{entry.per_side_kg_m2:g}",
+                    "確認済" if entry.confirmed else "要確認",entry.note))
+            if select in values:
+                tree.selection_set(select)
+                tree.see(select)
+        def fill(_event=None):
+            selected=tree.selection()
+            if selected:
+                entry=values[selected[0]]
+                code_var.set(selected[0])
+                constant_var.set(f"{entry.constant_kg_m2:g}")
+                side_var.set("" if entry.per_side_kg_m2 is None else f"{entry.per_side_kg_m2:g}")
+                note_var.set(entry.note)
+                confirmed_var.set(entry.confirmed)
+        tree.bind("<<TreeviewSelect>>",fill)
+        editor=ttk.Frame(window)
+        editor.grid(row=3,column=0,sticky="ew",padx=12,pady=8)
+        editor.columnconfigure(0,weight=1)
+        top=ttk.Frame(editor)
+        top.grid(row=0,column=0,sticky="ew")
+        ttk.Label(top,text="めっき記号").pack(side="left")
+        ttk.Entry(top,textvariable=code_var,width=9).pack(side="left",padx=(4,12))
+        ttk.Label(top,text="めっき量定数 kg/m²").pack(side="left")
+        ttk.Entry(top,textvariable=constant_var,width=9).pack(side="left",padx=(4,12))
+        ttk.Label(top,text="片面 kg/m²（任意）").pack(side="left")
+        ttk.Entry(top,textvariable=side_var,width=9).pack(side="left",padx=(4,12))
+        ttk.Checkbutton(top,text="確認済",variable=confirmed_var).pack(side="left",padx=(0,12))
+        bottom=ttk.Frame(editor)
+        bottom.grid(row=1,column=0,sticky="ew",pady=(6,0))
+        bottom.columnconfigure(1,weight=1)
+        ttk.Label(bottom,text="出典・付着量").grid(row=0,column=0,sticky="w")
+        ttk.Entry(bottom,textvariable=note_var).grid(row=0,column=1,sticky="ew",padx=(4,12))
+        def apply_entry():
+            try:
+                code,value=validate_coating(code_var.get(),constant_var.get(),side_var.get(),
+                                            note_var.get(),confirmed_var.get())
+            except ValueError as exc:
+                messagebox.showerror("入力エラー",str(exc),parent=window)
+                return
+            values[code]=value
+            refresh(code)
+        ttk.Button(top,text="追加・更新",command=apply_entry).pack(side="left")
+        def confirm_selected():
+            for code in tree.selection():
+                values[code]=replace_coating(values[code],confirmed=True)
+            refresh()
+        def delete_selected():
+            selected=tree.selection()
+            if not selected:
+                return
+            if not messagebox.askyesno("項目の削除確認",
+                    "選択した項目を削除しますか？\n"+"、".join(selected)+
+                    "\n\n「保存して閉じる」でマスタへ反映されます。",parent=window):
+                return
+            for code in selected:
+                values.pop(code,None)
+            refresh()
+            for var in (code_var,constant_var,side_var,note_var):
+                var.set("")
+        def save():
+            try:
+                self.coating.save(values)
+            except Exception as exc:
+                messagebox.showerror("保存エラー",str(exc),parent=window)
+                return
+            for row in self.product_rows:
+                self.restore_coating(row,row["coating"].get(),"")
+            self.inputs_changed()
+            self.status_var.set("めっき目付マスタを保存しました。再計算すると重量へ反映されます。")
+            window.destroy()
+        actions=ttk.Frame(window)
+        actions.grid(row=4,column=0,sticky="ew",padx=12,pady=(0,12))
+        edit_button=ttk.Menubutton(actions,text="編集")
+        edit_menu=tk.Menu(edit_button,tearoff=False)
+        edit_menu.add_command(label="選択を確認済にする",command=confirm_selected)
+        edit_menu.add_command(label="項目を削除",command=delete_selected)
+        def update_edit_menu():
+            state="normal" if tree.selection() else "disabled"
+            edit_menu.entryconfigure(0,state=state)
+            edit_menu.entryconfigure(1,state=state)
+        edit_menu.configure(postcommand=update_edit_menu)
+        edit_button.configure(menu=edit_menu)
+        edit_button.pack(side="left")
+        ttk.Button(actions,text="保存して閉じる",command=save).pack(side="right")
+        ttk.Button(actions,text="キャンセル",command=window.destroy).pack(side="right",padx=8)
+        refresh()
+        window.transient(self.root)
+        window.grab_set()
+
     def save_loss(self,key,var):
         if self.suppress_changes: return
         if self.loss_store:
@@ -297,11 +464,13 @@ class AutoLengthApp(ProjectWorkflow, ShearingApp):
                 name,spec,thick,w,h=[v.get().strip() for v in row["vars"]]
                 if not w and not h:
                     continue
-                products.append(ProductSpec(f"P{i}",normalize_spec(spec),float(thick) if thick else None,float(w),float(h),int(row["qty"].get()),row["rotate"].get(),name or f"製品{i}"))
+                products.append(ProductSpec(f"P{i}",spec,float(thick) if thick else None,float(w),float(h),int(row["qty"].get()),row["rotate"].get(),name or f"製品{i}",coating="" if row["coating"].get()=="なし" else row["coating"].get()))
             settings=[float(v.get()) for v in self.settings]
             length_loss=float(self.length_loss_var.get())
+            length_round=float(self.length_round_var.get())
+            time_limit=float(self.time_var.get())
         except ValueError:
-            messagebox.showerror("入力エラー","幅・長さ・枚数と大板条件を正しい数値で入力してください。")
+            messagebox.showerror("入力エラー","幅・長さ・枚数と大板条件・計算時間を正しい数値で入力してください。")
             return
         self.results=[]
         self.sheet_total_var.set("必要大板：計算中…")
@@ -309,7 +478,7 @@ class AutoLengthApp(ProjectWorkflow, ShearingApp):
         self.canvas.delete("all")
         self._set_detail("")
         self.current_products=products
-        self.current_settings=tuple(settings)+(length_loss,)
+        self.current_settings=tuple(settings)+(length_loss,length_round)
         self.export_button.configure(state="disabled")
         self.cancel_event=threading.Event()
         self.calc_button.configure(state="disabled")
@@ -318,7 +487,8 @@ class AutoLengthApp(ProjectWorkflow, ShearingApp):
         self.pending=None
         def worker():
             try:
-                self.pending=(optimize_auto(products,*settings,cancel=self.cancel_event,length_loss=length_loss),None)
+                self.pending=(optimize_auto(products,*settings,time_limit=time_limit,cancel=self.cancel_event,
+                                            length_loss=length_loss,length_round=length_round),None)
             except Exception as exc:
                 self.pending=([],exc)
         threading.Thread(target=worker,daemon=True).start()
@@ -337,8 +507,13 @@ class AutoLengthApp(ProjectWorkflow, ShearingApp):
             messagebox.showerror("計算エラー",str(error))
             return
         for i,r in enumerate(self.results):
-            self.result_tree.insert("","end",iid=str(i),values=(f"候補{i+1} / {'充足' if r.complete else '不足'}",len(r.sheets),f"{r.yield_rate:.2f}%"))
-        self.status_var.set("計算完了（探索候補）" if self.results else "候補なし・中止")
+            self.result_tree.insert("","end",iid=str(i),values=(f"候補{i+1} / {'充足' if r.complete else '不足'}",len(r.sheets),f"{r.yield_rate:.2f}%",f"{r.scrap_weight:,.1f}" if r.weight_available else "未計算"))
+        if not self.results:
+            self.status_var.set("候補なし・中止")
+        elif self.results[0].timed_out:
+            self.status_var.set("計算完了（計算時間で探索を打ち切り）")
+        else:
+            self.status_var.set("計算完了（探索候補）")
         if not self.results:
             self.sheet_total_var.set("必要大板：候補なし")
         if self.results:
@@ -383,17 +558,35 @@ class AutoLengthApp(ProjectWorkflow, ShearingApp):
         if not self.result_valid:
             self.sheet_total_var.set("前回の計算結果："+str(len(result.sheets))+"枚（再計算が必要）")
         products={p.id:p for p in self.current_products}
-        dims=Counter((s.sheet_type.spec,s.sheet_type.thickness,s.sheet_type.width,s.sheet_type.length) for s in result.sheets)
-        lines=[f"必要大板：合計 {len(result.sheets)} 枚",f"歩留り {result.yield_rate:.2f}% ／ 歩損 {result.loss_rate:.2f}%","","幅 × 自動計算長さ / 枚数"]
-        for (spec,t,w,h),n in dims.items():
-            lines.append(f"{w:g} × {h:g} mm … {n}枚\n  {spec or '規格未指定'} / 板厚 {str(t)+'mm' if t else '未指定'}")
+        dims=Counter((s.sheet_type.spec,s.sheet_type.thickness,s.sheet_type.width,s.sheet_type.length,s.sheet_type.weight_spec) for s in result.sheets)
+        lines=[f"必要大板：合計 {len(result.sheets)} 枚",f"歩留り {result.yield_rate:.2f}% ／ 歩損 {result.loss_rate:.2f}%"]
+        if result.weight_available:
+            lines.append(f"大板 {result.sheet_weight:,.1f} kg ／ 製品 {result.product_weight:,.1f} kg ／ 端材 {result.scrap_weight:,.1f} kg")
+        else:
+            lines.append("重量：板厚が空欄のため未計算")
+        coatings={}
+        for p in self.current_products:
+            code,entry=coating_detail(p.weight_spec)
+            if code:
+                coatings[code]=entry
+        for code,entry in sorted(coatings.items()):
+            if entry is None:
+                lines.append(f"めっき：{code} 未登録のためめっき量定数0で計算")
+            else:
+                lines.append(f"めっき：{code} めっき量定数 {entry.constant_kg_m2:g} kg/m²")
+        lines.extend(["",f"幅 × 自動計算長さ / 枚数（長さ {len({key[3] for key in dims})}種類）"])
+        for (spec,t,w,h,weight_spec),n in dims.items():
+            lines.append(f"{w:g} × {h:g} mm … {n}枚\n  {spec or '規格未指定'} / 板厚 {str(t)+'mm' if t else '未指定'} / 目付 {weight_spec or 'なし'}")
         lines.extend(["","製品別：配置枚数 / 必要枚数"])
         for p in self.current_products:
             lines.append(f"{p.id} {p.name}：{result.placed_by_product.get(p.id,0)} / {p.required_qty} 枚")
         if not result.complete:
             lines.append("※不足あり。この候補では必要数量を満たしていません。")
         if result.timed_out:
-            lines.append("※時間制限または中止時点の暫定候補。")
+            lines.append("※探索は計算時間・中止で打ち切りました。必要数量は満たしています。計算時間を延ばすとより良い候補が出る場合があります。"
+                         if result.complete else "※時間制限または中止時点の暫定候補。必要数量を満たしていません。")
+        if result.weight_available:
+            lines.extend("※"+warning for warning in result.warnings)
         self._set_detail("\n".join(lines))
         c=self.canvas
         c.delete("all")

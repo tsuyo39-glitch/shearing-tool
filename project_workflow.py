@@ -15,7 +15,7 @@ class ProjectWorkflow:
         self.project_vars=[tk.StringVar() for _ in range(3)]
 
     def finish_workflow(self):
-        for var in self.settings+[self.length_loss_var]:
+        for var in self.settings+[self.length_loss_var,self.length_round_var]:
             var.trace_add("write",self.inputs_changed)
         for var in self.project_vars:
             var.trace_add("write",self.metadata_changed)
@@ -37,8 +37,8 @@ class ProjectWorkflow:
 
     def snapshot(self):
         return {"version":1,"name":self.project_vars[0].get(),"customer":self.project_vars[1].get(),
-                "notes":self.project_vars[2].get(),"settings":[v.get() for v in self.settings]+[self.length_loss_var.get()],
-                "products":[{"values":[v.get() for v in r["vars"]],"qty":r["qty"].get(),"rotate":r["rotate"].get()} for r in self.product_rows]}
+                "notes":self.project_vars[2].get(),"settings":[v.get() for v in self.settings]+[self.length_loss_var.get(),self.length_round_var.get()],
+                "products":[{"values":[v.get() for v in r["vars"]],"qty":r["qty"].get(),"rotate":r["rotate"].get(),"coating":r["coating"].get()} for r in self.product_rows]}
 
     def project_metadata(self,then=None):
         win=tk.Toplevel(self.root); win.title("案件情報"); win.geometry("620x260"); win.minsize(500,240)
@@ -85,14 +85,16 @@ class ProjectWorkflow:
         self.suppress_changes=True
         try:
             for row in list(self.product_rows): self.remove_product_row(row)
-            for var,value in zip(self.settings+[self.length_loss_var],data["settings"]): var.set(value)
+            values=list(data["settings"])
+            if len(values)==5: values.append("0")  # 長さ丸め追加前の案件
+            for var,value in zip(self.settings+[self.length_loss_var,self.length_round_var],values): var.set(value)
             for var,key in zip(self.project_vars,("name","customer","notes")): var.set(data[key])
             self.append_products(data["products"])
         finally:
             self.suppress_changes=False
         self.inputs_changed()
         self.project_dirty=False
-        for key,var in (("width",self.settings[1]),("length",self.length_loss_var),("gap",self.settings[3])):
+        for key,var in (("width",self.settings[1]),("length",self.length_loss_var),("gap",self.settings[3]),("round",self.length_round_var)):
             self.save_loss(key,var)
 
     def open_project_dialog(self):
@@ -115,6 +117,7 @@ class ProjectWorkflow:
             self.add_product_row()
             row=self.product_rows[-1]
             for var,value in zip(row["vars"],record["values"]): var.set(value)
+            self.restore_coating(row,record.get("coating"),record["values"][1])
             row["qty"].set(record["qty"]); row["rotate"].set(record["rotate"])
 
     def paste_excel(self):

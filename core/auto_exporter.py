@@ -10,6 +10,7 @@ from openpyxl.drawing.image import Image as ExcelImage
 from openpyxl.styles import Alignment, Border, Font, PatternFill
 from .exporter import _title, _header, _finish, THIN
 from .optimizer import group_sheet_plans, validate_layout
+from .weight import coating_detail, plate_weight_kg
 
 COLORS = ["#b9ddf3", "#bee5cb", "#ffe09d", "#d9cdf4", "#fac7b5", "#aadedd"]
 
@@ -61,30 +62,73 @@ def export_auto(destination, result, products, settings, candidate_no=1):
     wb=Workbook()
     ws=wb.active
     ws.title="結果一覧"
-    _title(ws,"大板長さ自動計算 — 取り合わせ結果",10)
+    _title(ws,"大板長さ自動計算 — 取り合わせ結果",14)
     ws.append(["出力日時",datetime.now().strftime("%Y-%m-%d %H:%M:%S"),"候補",candidate_no])
     ws.append(["状態","全数充足" if result.complete else "不足あり","大板枚数",len(result.sheets),"歩留り",result.yield_rate/100,"歩損",result.loss_rate/100])
     ws["F3"].number_format=ws["H3"].number_format="0.00%"
-    ws.append(["大板幅(mm)",settings[0],"幅ロス(mm)",settings[1],"最大長さ(mm)",settings[2],"切断代(mm)",settings[3],"前後各ロス(mm)",settings[4] if len(settings)>4 else 0])
-    ws.append(["注記","時間制限・中止時点の暫定候補" if result.timed_out else "探索候補（最適性の保証なし）"])
+    totals=[result.sheet_weight,result.product_weight,result.scrap_weight] if result.weight_available else ["未計算"]*3
+    ws.append(["大板重量(kg)",totals[0],"製品重量(kg)",totals[1],"端材重量(kg)",totals[2]])
+    for column in "BDF":
+        ws[f"{column}{ws.max_row}"].number_format="#,##0.0"
+    ws.append(["大板幅(mm)",settings[0],"幅ロス(mm)",settings[1],"最大長さ(mm)",settings[2],"切断代(mm)",settings[3],
+               "前後各ロス(mm)",settings[4] if len(settings)>4 else 0,"長さ丸め(mm)",settings[5] if len(settings)>5 else 0])
+    merged=[]
+    if not result.timed_out:
+        note="探索候補（最適性の保証なし）"
+    elif result.complete:
+        note="必要数量を満たす候補。計算時間・中止で探索を打ち切ったため、時間を延ばすとより良い候補が出る場合があります。"
+    else:
+        note="時間制限・中止時点の暫定候補。必要数量を満たしていません。"
+    ws.append(["注記",note])
+    merged.append(ws.max_row)
     ws.append(["説明","計算時点の結果です。入力欄を変更した場合はアプリで再計算してください。"])
+    merged.append(ws.max_row)
+    if not result.weight_available:
+        weight_note="板厚が空欄の製品があるため合計重量は未計算です。板厚が入力された行のみ重量を表示しています。"
+    elif result.warnings:
+        weight_note=" / ".join(result.warnings)
+    else:
+        weight_note="全製品の板厚が入力済みのため重量を算出しています。"
+    ws.append(["重量の注記",weight_note])
+    merged.append(ws.max_row)
     ws.append([])
-    ws.append(["規格","板厚(mm)","大板幅(mm)","自動長さ(mm)","必要大板枚数"])
-    _header(ws[8])
-    counts=Counter((s.sheet_type.spec,s.sheet_type.thickness,s.sheet_type.width,s.sheet_type.length) for s in result.sheets)
-    for (spec,t,w,h),n in counts.items():
-        ws.append([spec or "未指定",t if t is not None else "未指定",w,h,n])
+    ws.append(["規格","板厚(mm)","めっき記号","めっき量定数 kg/m²","大板幅(mm)","自動長さ(mm)","必要大板枚数","大板重量(kg)"])
+    _header(ws[ws.max_row])
+    counts=Counter((s.sheet_type.spec,s.sheet_type.thickness,s.sheet_type.width,s.sheet_type.length,s.sheet_type.weight_spec) for s in result.sheets)
+    for (spec,t,w,h,weight_spec),n in counts.items():
+        code,entry=coating_detail(weight_spec)
+        ws.append([spec or "未指定",t if t is not None else "未指定",code or "なし",
+                   entry.constant_kg_m2 if entry else ("未登録" if code else "—"),w,h,n,
+                   plate_weight_kg(weight_spec,t,w,h,n)[0] if t is not None else "未計算"])
+        ws.cell(ws.max_row,8).number_format="#,##0.0"
     ws.append([])
-    ws.append(["製品ID","製品名","規格","板厚(mm)","幅(mm)","長さ(mm)","必要枚数","配置枚数","不足枚数","回転許可"])
+    ws.append(["製品ID","製品名","規格","板厚(mm)","めっき記号","めっき量定数 kg/m²","幅(mm)","長さ(mm)",
+               "必要枚数","配置枚数","不足枚数","回転許可","単重(kg)","配置重量(kg)"])
     _header(ws[ws.max_row])
     for p in products:
-        ws.append([p.id,p.name,p.spec or "未指定",p.thickness,p.width,p.length,p.required_qty,result.placed_by_product.get(p.id,0),result.shortage_by_product[p.id],"可" if p.rotation_allowed else "不可"])
+        placed=result.placed_by_product.get(p.id,0)
+        code,entry=coating_detail(p.weight_spec)
+        unit=plate_weight_kg(p.weight_spec,p.thickness,p.width,p.length)[0] if p.thickness is not None else None
+        ws.append([p.id,p.name,p.spec or "未指定",p.thickness,code or "なし",
+                   entry.constant_kg_m2 if entry else ("未登録" if code else "—"),
+                   p.width,p.length,p.required_qty,placed,
+                   result.shortage_by_product[p.id],"可" if p.rotation_allowed else "不可",
+                   "未計算" if unit is None else unit,
+                   "未計算" if unit is None else unit*placed])
+        for column in (13,14):
+            ws.cell(ws.max_row,column).number_format="#,##0.000"
     ws.append([])
     ws.append(["計算式","有効幅＝大板幅－幅ロス。大板長さ＝配置の最下端＋後端ロス（前端ロスは配置座標に含む）。"])
+    merged.append(ws.max_row)
     ws.append(["歩留り","製品総面積 ÷ 投入大板総面積 × 100。歩損＝100－歩留り。"])
+    merged.append(ws.max_row)
+    ws.append(["重量","JIS G 3302-2010 表7：単位質量(kg/m²)＝表示厚さ(mm)×7.85＋めっき量定数(kg/m²)。単重＝単位質量×幅×長さ。端材重量＝大板重量－製品重量。"])
+    merged.append(ws.max_row)
+    ws.append(["重量の前提","表示厚さはめっき前の原板厚さ。めっき量定数はJIS G 3302-2010 表8の値（付着量g/m²とは別物）。板厚が空欄の製品が1つでもあると合計重量を未計算にします。"])
+    merged.append(ws.max_row)
     colors={p.id:COLORS[i%len(COLORS)] for i,p in enumerate(products)}
     product_map={p.id:p for p in products}
-    _finish(ws,[15,26,19,19,19,19,18,18,16,16])
+    _finish(ws,[16,24,20,16,16,17,15,15,13,13,13,12,15,17])
     for sheet in wb:
         for row in sheet:
             for cell in row:
@@ -96,8 +140,8 @@ def export_auto(destination, result, products, settings, candidate_no=1):
                 if isinstance(cell.value,str) and cell.value.startswith("="):
                     cell.data_type="s"
         if sheet.title=="結果一覧":
-            for r in (5,6,sheet.max_row-1,sheet.max_row):
-                sheet.merge_cells(start_row=r,start_column=2,end_row=r,end_column=10)
+            for r in merged:
+                sheet.merge_cells(start_row=r,start_column=2,end_row=r,end_column=14)
         else:
             for r in range(sheet.max_row-2,sheet.max_row+1):
                 sheet.merge_cells(start_row=r,start_column=2,end_row=r,end_column=8)

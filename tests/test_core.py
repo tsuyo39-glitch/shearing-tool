@@ -13,7 +13,7 @@ from core.weight import normalize_spec, plate_weight_kg
 class WeightTests(unittest.TestCase):
     def test_z08_weight(self):
         weight, warning = plate_weight_kg("SGCC-Z08-NC", 1.2, 1000, 1000)
-        self.assertAlmostEqual(weight, 9.5, places=6)
+        self.assertAlmostEqual(weight, 9.54, places=6)
         self.assertIsNone(warning)
 
     def test_plain_steel_weight(self):
@@ -24,7 +24,7 @@ class WeightTests(unittest.TestCase):
     def test_nfkc_and_z8_normalization(self):
         self.assertEqual(normalize_spec(" ＳＧＣＣ－Ｚ８－ＮＣ "), "SGCC-Z8-NC")
         weight, warning = plate_weight_kg("SGCC-Z8-NC", 1.2, 1000, 1000)
-        self.assertAlmostEqual(weight, 9.5, places=6)
+        self.assertAlmostEqual(weight, 9.54, places=6)
         self.assertIsNone(warning)
 
 

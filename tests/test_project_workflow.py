@@ -8,7 +8,7 @@ from core.project_io import save_project,load_project,parse_paste
 
 def sample():
     return {"version":1,"name":"日本語案件","customer":"得意先A","notes":"再注文",
-            "settings":["1219","10","1219","0","0"],
+            "settings":["1219","10","1219","0","0","0"],
             "products":[{"values":["製品A","SPCC","","155","1219"],"qty":"7","rotate":False},
                         {"values":["製品B","SUS304","1.2","100","500"],"qty":"2","rotate":True}]}
 

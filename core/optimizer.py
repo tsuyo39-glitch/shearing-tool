@@ -31,7 +31,7 @@ def _compatible(product: ProductSpec, sheet: SheetType) -> bool:
         or sheet.thickness is None
         or abs(product.thickness - sheet.thickness) <= EPSILON
     )
-    return product.spec == sheet.spec and thickness_matches
+    return product.spec == sheet.spec and product.coating == sheet.coating and thickness_matches
 
 
 def _orientations(product: ProductSpec) -> list[tuple[float, float, bool]]:
@@ -163,7 +163,7 @@ def _result(plans: list[SheetPlan], products: list[ProductSpec], placed: Counter
                 warnings.append(warning)
         else:
             weight, warning = plate_weight_kg(
-                plan.sheet_type.spec,
+                plan.sheet_type.weight_spec,
                 plan.sheet_type.thickness,
                 plan.sheet_type.width,
                 plan.sheet_type.length,
@@ -179,7 +179,7 @@ def _result(plans: list[SheetPlan], products: list[ProductSpec], placed: Counter
                 if warning not in warnings:
                     warnings.append(warning)
             else:
-                weight, warning = plate_weight_kg(product.spec, product.thickness, product.width, product.length)
+                weight, warning = plate_weight_kg(product.weight_spec, product.thickness, product.width, product.length)
                 product_weight += weight
                 if warning and warning not in warnings:
                     warnings.append(warning)
@@ -223,7 +223,7 @@ def sheet_pattern_key(plan: SheetPlan) -> tuple:
     sheet = plan.sheet_type
     sheet_key = (
         sheet.spec, sheet.thickness if sheet.thickness is not None else -1.0, sheet.width, sheet.length,
-        sheet.edge_loss, sheet.cut_allowance,
+        sheet.edge_loss, sheet.cut_allowance, sheet.weight_spec,
     )
     placements = tuple(sorted(
         (

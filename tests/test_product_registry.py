@@ -11,10 +11,10 @@ class RegistryTests(unittest.TestCase):
             registry=ProductRegistry(path)
             registry.save(["製品A","SUS304","1.2","599.5","500"],"10",True)
             registry=ProductRegistry(path)
-            self.assertEqual(registry.list()[0],("製品A","SUS304","1.2","599.5","500",10,1))
+            self.assertEqual(registry.list()[0],("製品A","SUS304","1.2","599.5","500",10,1,None))
             registry.save(["製品A","","","600","510"],"2",False)
             self.assertEqual(len(registry.list()),1)
-            self.assertEqual(registry.list()[0][-2:],(2,0))
+            self.assertEqual(registry.list()[0][5:7],(2,0))
             for value in ("0","-1","nan","inf",""):
                 with self.assertRaises(ValueError):
                     registry.save(["製品A","","",value,"500"],"2",False)

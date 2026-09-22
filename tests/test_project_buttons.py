@@ -14,7 +14,7 @@ from core.project_io import load_project, save_project
 DUMMY = {
     'version': 1, 'name': '検証用_ダミー案件A', 'customer': '架空テスト株式会社',
     'notes': '動作確認専用・実注文ではありません',
-    'settings': ['1219', '10', '1219', '0', '0'],
+    'settings': ['1219', '10', '1219', '0', '0', '0'],
     'products': [
         {'values': ['ダミー帯板', 'SPCC', '2.3', '155', '1219'], 'qty': '14', 'rotate': False},
         {'values': ['ダミー小板', 'SUS304', '', '300', '400'], 'qty': '6', 'rotate': True},
@@ -165,7 +165,8 @@ class ProjectButtonTests(unittest.TestCase):
              patch('project_workflow.filedialog.asksaveasfilename', return_value=str(self.path)):
             self.button('案件を開く').invoke()
         self.assertEqual(load_project(self.path)['products'][0]['qty'], '21')
-        self.assertEqual(self.app.snapshot(), other)
+        expected = dict(other, products=[dict(row, coating="なし") for row in other["products"]])
+        self.assertEqual(self.app.snapshot(), expected)
         self.assertEqual(self.app.project_path, target)
 
     def test_toolbar_visible_initial_and_minimum(self):

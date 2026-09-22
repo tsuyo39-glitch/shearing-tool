@@ -21,6 +21,8 @@ def validate_product(row, allow_blank=False):
         raise ValueError("製品の列構成が不正です")
     if not all(isinstance(v,str) for v in row["values"]) or not isinstance(row.get("qty"),str) or type(row.get("rotate")) is not bool:
         raise ValueError("製品データの型が不正です")
+    if "coating" in row and not isinstance(row["coating"],str):
+        raise ValueError("目付の形式が不正です")
     name,spec,t,w,h=row["values"]
     q=number(row["qty"])
     if q!=int(q): raise ValueError("必要枚数は正の整数です")
@@ -37,9 +39,10 @@ def validate_project(data):
         if not isinstance(data.get(key),str): raise ValueError("案件情報が不正です")
     if not data["name"].strip(): raise ValueError("案件名を入力してください")
     settings=data.get("settings")
-    if not isinstance(settings,list) or len(settings)!=5 or not all(isinstance(v,str) for v in settings):
+    if not isinstance(settings,list) or len(settings) not in (5,6) or not all(isinstance(v,str) for v in settings):
         raise ValueError("大板条件が不正です")
-    w,e,h,g,l=[number(v,positive=i in (0,2)) for i,v in enumerate(settings)]
+    w,e,h,g,l=[number(v,positive=i in (0,2)) for i,v in enumerate(settings[:5])]
+    if len(settings)==6: number(settings[5],positive=False)
     if w<=e or h<=2*l: raise ValueError("ロスを除く有効寸法が0以下です")
     if not isinstance(data.get("products"),list): raise ValueError("製品一覧が不正です")
     for row in data["products"]: validate_product(row,True)

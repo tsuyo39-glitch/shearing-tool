@@ -6,7 +6,7 @@ from pathlib import Path
 class LossSettings:
     def __init__(self,path):
         self.path=Path(path)
-        self.values={"width":10.0,"length":0.0,"gap":0.0}
+        self.values={"width":10.0,"length":0.0,"gap":0.0,"round":0.0,"time":10.0}
         if self.path.exists():
             data=json.loads(self.path.read_text(encoding="utf-8"))
             for key in self.values:
